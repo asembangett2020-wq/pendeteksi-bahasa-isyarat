@@ -3,7 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <title>Deteksi Bahasa Isyarat</title>
+
+  <!-- ONNX Runtime -->
   <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
+
   <style>
     body {
       font-family: Arial;
@@ -17,15 +20,17 @@
     }
   </style>
 </head>
+
 <body>
 
-  <h1>Deteksi Bahasa Isyarat</h1>
+<h1>Deteksi Bahasa Isyarat</h1>
 
-  <video id="video" width="640" height="480" autoplay></video>
-  <canvas id="canvas" width="640" height="480"></canvas>
+<video id="video" width="640" height="480" autoplay></video>
+<canvas id="canvas" width="640" height="480"></canvas>
 
-  <h2 id="result">Menunggu...</h2>
+<h2 id="result">Menunggu...</h2>
 
-  <script src="app.js"></script>
+<script src="app.js"></script>
+
 </body>
 </html>
