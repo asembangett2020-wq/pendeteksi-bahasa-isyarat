@@ -84,7 +84,8 @@ async function processFrame() {
     
     // D. Membaca hasil tebakan AI[cite: 1]
     const numClasses = CONFIG.labels.length;
-    const elements = 8400; 
+    const dims = result[session.outputNames[0].dims;
+    const elements = dims[2];
     let rawBoxes = [];
 
     for (let i = 0; i < elements; i++) {
