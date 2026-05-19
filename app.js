@@ -1,136 +1,139 @@
+// ======================================================================
+// 1. PENGATURAN PROYEK (KALIAN HANYA PERLU MENGUBAH BAGIAN INI)
+// ======================================================================
+const CONFIG = {
+    // Nama file model AI yang sudah kalian download dari Colab
+    modelPath: './best.onnx', 
+    
+    // GANTI INI dengan nama kelas kalian. 
+    // PERHATIAN: Urutannya HARUS SAMA PERSIS dengan urutan di Roboflow!
+    labels: ["Kelas_Satu", "Kelas_Dua"], 
+    
+    // Batas keyakinan AI (0.45 = 45%). 
+    // Jika AI terlalu sering salah tebak, naikkan angkanya (misal 0.60).
+    threshold: 0.45,
+    
+    // Batas untuk menghapus kotak deteksi yang menumpuk (Biarkan saja 0.4)
+    iouThreshold: 0.4
+};
+
+// ======================================================================
+// 2. MESIN INTI AI (JANGAN MENGUBAH KODE DI BAWAH INI!)
+// ======================================================================
+
+// Menangkap elemen-elemen dari halaman HTML agar bisa dikendalikan oleh Javascript[cite: 1]
 const video = document.getElementById('webcam');
 const overlay = document.getElementById('overlay');
 const ctxOverlay = overlay.getContext('2d');
 const processor = document.getElementById('processor');
 const ctxProcessor = processor.getContext('2d', { willReadFrequently: true });
-const statusPanel = document.getElementById('status-panel');
-const logPanel = document.getElementById('log-panel');
+const status = document.getElementById('status');
 const initBtn = document.getElementById('btn-init');
 
-// --- AUDIO & NOTIFICATION STATE ---
-const alarmSound = new Audio('https://actions.google.com/sounds/v1/alarms/alarm_clock.ogg');
-const successSound = new Audio('https://actions.google.com/sounds/v1/cartoon/wood_plank_flicks.ogg');
-let currentState = "AWAITING"; 
-
 let session;
-const TARGET_SIZE = 640;
-const CONFIDENCE_THRESHOLD = 0.25;
-const IOU_THRESHOLD = 0.4;
+const TARGET_SIZE = 640; // Ukuran gambar standar yang diminta oleh YOLO11n
 
-// Bind the boot sequence to the button
+// Langkah 1: Memuat Model AI saat tombol ditekan[cite: 1]
 initBtn.addEventListener('click', async () => {
     initBtn.disabled = true;
-    initBtn.innerText = "BOOTING...";
-    
-    // Request Web Notification Permissions
-    if ("Notification" in window && Notification.permission !== "granted") {
-        await Notification.requestPermission();
-    }
-    
-    // Pre-load audio to bypass browser autoplay restrictions
-    alarmSound.load();
-    successSound.load();
-    
-    loadModel();
-});
-
-/**
- * Initialize the ONNX Runtime Session (High Performance)
- */
-async function loadModel() {
+    initBtn.innerText = "MEMUAT MODEL AI...";
     try {
         ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/';
-        
-        // SPEED HACK 1: Unlock Multi-threading
-        // This forces the browser to use multiple CPU cores instead of choking on just one.
-        const numCores = navigator.hardwareConcurrency || 4;
-        ort.env.wasm.numThreads = Math.min(4, numCores); 
-        
-        // SPEED HACK 2: Hardware Acceleration
-        // We tell it to try 'webgl' (GPU) first. If the laptop GPU rejects it, it gracefully falls back to multi-threaded 'wasm'.
-        session = await ort.InferenceSession.create('./best.onnx', { 
-            executionProviders: ['webgl', 'wasm'],
-            graphOptimizationLevel: 'all'
+        session = await ort.InferenceSession.create(CONFIG.modelPath, { 
+            executionProviders: ['webgl', 'wasm'] // Meminta browser menggunakan GPU/VGA jika tersedia
         });
-        
-        statusPanel.innerText = "STANDBY: AWAITING CAMERA INITIALIZATION";
         startCamera();
     } catch (e) {
-        console.error("Model Mount Failure:", e);
-        statusPanel.innerText = "SYSTEM FAILURE: UNABLE TO MOUNT MODEL";
-        statusPanel.style.borderColor = "#ff0000";
+        status.innerText = "GAGAL: FILE MODEL TIDAK DITEMUKAN";
+        console.error(e);
     }
-}
+});
 
-/**
- * Bind the hardware stream to the video element
- */
+// Langkah 2: Menyalakan Kamera Web[cite: 1]
 async function startCamera() {
-    try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-            video: { width: { ideal: 640 }, height: { ideal: 480 } },
-            audio: false
-        });
-        
-        video.srcObject = stream;
-        video.onloadedmetadata = async () => {
-            try {
-                await video.play();
-                statusPanel.innerText = "AWAITING SUBJECT...";
-                initBtn.style.display = "none"; // Hide button once running
-                requestAnimationFrame(processFrame);
-            } catch (playError) {
-                console.error("Playback failed:", playError);
-            }
-        };
-    } catch (e) {
-        console.error("Camera Access Failure:", e);
-        statusPanel.innerText = "SYSTEM FAILURE: CAMERA ACCESS DENIED";
-        statusPanel.style.borderColor = "#ff0000";
-    }
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 }, audio: false });
+    video.srcObject = stream;
+    video.onloadedmetadata = () => {
+        video.play();
+        status.innerText = "SISTEM AKTIF: MENUNGGU OBJEK";
+        initBtn.style.display = "none";
+        requestAnimationFrame(processFrame);
+    };
 }
 
-/**
- * Extract frame, update UI log, and trigger Web Notification
- */
-function logViolationAndNotify() {
-    // 1. Capture the raw video frame
-    const captureCanvas = document.createElement('canvas');
-    captureCanvas.width = video.videoWidth;
-    captureCanvas.height = video.videoHeight;
-    const captureCtx = captureCanvas.getContext('2d');
-    captureCtx.drawImage(video, 0, 0, captureCanvas.width, captureCanvas.height);
+// Langkah 3: Proses Deteksi Berulang (Looping)[cite: 1]
+async function processFrame() {
+    if (!session) return;
 
-    // 2. Extract Data URL
-    const dataUrl = captureCanvas.toDataURL('image/jpeg', 0.8);
-    const timestamp = new Date().toLocaleTimeString();
+    // A. Mengambil satu gambar dari video kamera dan menyesuaikan ukurannya ke 640x640[cite: 1]
+    ctxProcessor.drawImage(video, 0, 0, TARGET_SIZE, TARGET_SIZE);
+    const imageData = ctxProcessor.getImageData(0, 0, TARGET_SIZE, TARGET_SIZE).data;
+    const float32Data = new Float32Array(3 * TARGET_SIZE * TARGET_SIZE);
+
+    // B. Mengubah format warna piksel agar bisa dibaca oleh matriks AI[cite: 1]
+    for (let i = 0; i < TARGET_SIZE * TARGET_SIZE; i++) {
+        float32Data[i] = imageData[i * 4] / 255.0; // Warna Merah (R)
+        float32Data[i + TARGET_SIZE * TARGET_SIZE] = imageData[i * 4 + 1] / 255.0; // Warna Hijau (G)
+        float32Data[i + 2 * TARGET_SIZE * TARGET_SIZE] = imageData[i * 4 + 2] / 255.0; // Warna Biru (B)
+    }
+
+    // C. Mengirim gambar ke otak AI (Model ONNX)[cite: 1]
+    const inputTensor = new ort.Tensor('float32', float32Data, [1, 3, TARGET_SIZE, TARGET_SIZE]);
+    const results = await session.run({ [session.inputNames[0]]: inputTensor });
+    const output = results[session.outputNames[0]].data; 
     
-    // 3. Inject into Sidebar Log
-    const entry = document.createElement('div');
-    entry.className = 'log-entry';
-    entry.innerHTML = `
-        <img src="${dataUrl}" alt="Violation Snapshot">
-        <p>🚨 LOGGED: ${timestamp}</p>
-    `;
-    logPanel.insertBefore(entry, logPanel.children[1]);
+    // D. Membaca hasil tebakan AI[cite: 1]
+    const numClasses = CONFIG.labels.length;
+    const elements = 8400; 
+    let rawBoxes = [];
 
-    // 4. Trigger OS/Browser Notification
-    if ("Notification" in window && Notification.permission === "granted") {
-        new Notification("🚨 PROTOCOL VIOLATION", {
-            body: `Unauthorized subject detected at ${timestamp}.`,
-            icon: dataUrl, // Uses the captured face as the notification icon!
-            vibrate: [200, 100, 200]
-        });
+    for (let i = 0; i < elements; i++) {
+        let maxScore = 0;
+        let classId = -1;
+        
+        // Mencari nilai persentase tertinggi di antara semua tebakan kelas
+        for (let c = 0; c < numClasses; c++) {
+            const score = output[i + (4 + c) * elements];
+            if (score > maxScore) {
+                maxScore = score;
+                classId = c;
+            }
+        }
+
+        // Jika tebakan AI melebihi batas threshold yang kalian atur
+        if (maxScore > CONFIG.threshold) {
+            let x = output[i];
+            let y = output[i + elements];
+            let w = output[i + 2 * elements];
+            let h = output[i + 3 * elements];
+            
+            // Menyesuaikan ukuran kotak hasil deteksi[cite: 1]
+            if (w <= 1.5) { x *= TARGET_SIZE; y *= TARGET_SIZE; w *= TARGET_SIZE; h *= TARGET_SIZE; }
+
+            rawBoxes.push({
+                x: x - w / 2, y: y - h / 2, w: w, h: h,
+                score: maxScore,
+                classId: classId
+            });
+        }
     }
+
+    // E. Membersihkan kotak-kotak yang menumpuk pada objek yang sama[cite: 1]
+    const finalBoxes = nonMaxSuppression(rawBoxes, CONFIG.iouThreshold);
+    drawBoxes(finalBoxes);
+    requestAnimationFrame(processFrame);
 }
 
+// ======================================================================
+// FUNGSI MATEMATIKA TAMBAHAN (Intersection over Union & NMS)
+// ======================================================================
 function calculateIoU(box1, box2) {
     const xA = Math.max(box1.x, box2.x);
     const yA = Math.max(box1.y, box2.y);
     const xB = Math.min(box1.x + box1.w, box2.x + box2.w);
     const yB = Math.min(box1.y + box1.h, box2.y + box2.h);
     const intersectionArea = Math.max(0, xB - xA) * Math.max(0, yB - yA);
-    return intersectionArea / ((box1.w * box1.h) + (box2.w * box2.h) - intersectionArea);
+    return intersectionArea / ((box1.w * box1.h) + (box2.w * box2.h) - intersectionArea); //[cite: 1]
 }
 
 function nonMaxSuppression(boxes, iouThreshold) {
@@ -139,118 +142,24 @@ function nonMaxSuppression(boxes, iouThreshold) {
     while (boxes.length > 0) {
         const current = boxes.shift();
         result.push(current);
-        boxes = boxes.filter(box => calculateIoU(current, box) < iouThreshold);
+        boxes = boxes.filter(box => calculateIoU(current, box) < iouThreshold); //[cite: 1]
     }
-    return result;
+    return result; //[cite: 1]
 }
 
-/**
- * Main Inference Loop
- */
-async function processFrame() {
-    if (!session) return;
-
-    ctxProcessor.drawImage(video, 0, 0, TARGET_SIZE, TARGET_SIZE);
-    const imageData = ctxProcessor.getImageData(0, 0, TARGET_SIZE, TARGET_SIZE).data;
-
-    const float32Data = new Float32Array(3 * TARGET_SIZE * TARGET_SIZE);
-    for (let i = 0; i < TARGET_SIZE * TARGET_SIZE; i++) {
-        float32Data[i]                                   = imageData[i * 4] / 255.0;
-        float32Data[i + TARGET_SIZE * TARGET_SIZE]       = imageData[i * 4 + 1] / 255.0;
-        float32Data[i + 2 * TARGET_SIZE * TARGET_SIZE]   = imageData[i * 4 + 2] / 255.0;
-    }
-
-    const inputTensor = new ort.Tensor('float32', float32Data, [1, 3, TARGET_SIZE, TARGET_SIZE]);
-    const results = await session.run({ [session.inputNames[0]]: inputTensor });
-    const output = results[session.outputNames[0]].data; 
-    
-    let rawBoxes = [];
-    const elements = 8400;
-
-    for (let i = 0; i < elements; i++) {
-        let x = output[i];
-        let y = output[i + elements];
-        let w = output[i + 2 * elements];
-        let h = output[i + 3 * elements];
-        const scoreMask = output[i + 4 * elements]; 
-        const scoreNoMask = output[i + 5 * elements];
-        const maxScore = Math.max(scoreMask, scoreNoMask);
-
-        if (maxScore > CONFIDENCE_THRESHOLD) {
-            if (w <= 1.5 && h <= 1.5) {
-                x *= TARGET_SIZE; y *= TARGET_SIZE; w *= TARGET_SIZE; h *= TARGET_SIZE;
-            }
-            rawBoxes.push({
-                x: x - w / 2, y: y - h / 2, w: w, h: h,
-                score: maxScore,
-                classId: scoreNoMask > scoreMask ? 1 : 0
-            });
-        }
-    }
-
-    const finalBoxes = nonMaxSuppression(rawBoxes, IOU_THRESHOLD);
+// Fungsi untuk menggambar kotak hijau beserta teks label di atas video
+function drawBoxes(boxes) {
     ctxOverlay.clearRect(0, 0, overlay.width, overlay.height);
-    let isViolating = false;
-
-    if (finalBoxes.length > 0) {
-        finalBoxes.forEach(box => {
-            const scaleX = overlay.width / TARGET_SIZE;
-            const scaleY = overlay.height / TARGET_SIZE;
-            const scaledX = box.x * scaleX;
-            const scaledY = box.y * scaleY;
-            const scaledW = box.w * scaleX;
-            const scaledH = box.h * scaleY;
-
-            if (box.classId === 1) isViolating = true;
-            
-            const color = box.classId === 1 ? '#FF3B30' : '#34C759'; 
-            const labelText = box.classId === 1 ? `NO MASK ${(box.score * 100).toFixed(1)}%` : `MASK ${(box.score * 100).toFixed(1)}%`;
-
-            ctxOverlay.strokeStyle = color;
-            ctxOverlay.lineWidth = 4;
-            ctxOverlay.strokeRect(scaledX, scaledY, scaledW, scaledH);
-            
-            ctxOverlay.font = 'bold 18px monospace';
-            const textWidth = ctxOverlay.measureText(labelText).width;
-            ctxOverlay.fillStyle = color;
-            ctxOverlay.fillRect(scaledX - 2, scaledY - 28, textWidth + 12, 28);
-            
-            ctxOverlay.fillStyle = '#FFFFFF';
-            ctxOverlay.fillText(labelText, scaledX + 4, scaledY - 8);
-        });
-
-        // --- GLOBAL STATE MACHINE ---
-        if (isViolating) {
-            statusPanel.innerText = "🚨 ACCESS DENIED: PROTOCOL VIOLATED";
-            statusPanel.style.backgroundColor = "#4a0000";
-            statusPanel.style.borderColor = "#FF3B30";
-            statusPanel.style.color = "#ffcccc";
-            
-            if (currentState !== "DENIED") {
-                alarmSound.currentTime = 0; 
-                alarmSound.play();
-                logViolationAndNotify(); // Snapshot & Web Notification!
-                currentState = "DENIED";
-            }
-        } else {
-            statusPanel.innerText = "✅ ACCESS GRANTED: PROCEED TO AIRLOCK";
-            statusPanel.style.backgroundColor = "#003300";
-            statusPanel.style.borderColor = "#34C759";
-            statusPanel.style.color = "#ccffcc";
-            
-            if (currentState !== "GRANTED") {
-                successSound.currentTime = 0; 
-                successSound.play();
-                currentState = "GRANTED";
-            }
-        }
-    } else {
-        statusPanel.innerText = "AWAITING SUBJECT...";
-        statusPanel.style.backgroundColor = "transparent";
-        statusPanel.style.borderColor = "#555";
-        statusPanel.style.color = "#ffffff";
-        currentState = "AWAITING"; 
-    }
-
-    requestAnimationFrame(processFrame);
+    boxes.forEach(box => {
+        const scaleX = overlay.width / TARGET_SIZE;
+        const scaleY = overlay.height / TARGET_SIZE;
+        
+        ctxOverlay.strokeStyle = "#34C759";
+        ctxOverlay.lineWidth = 3;
+        ctxOverlay.strokeRect(box.x * scaleX, box.y * scaleY, box.w * scaleX, box.h * scaleY);
+        
+        ctxOverlay.fillStyle = "#34C759";
+        ctxOverlay.font = "bold 16px Arial";
+        ctxOverlay.fillText(`${CONFIG.labels[box.classId]} ${(box.score * 100).toFixed(0)}%`, box.x * scaleX, box.y * scaleY - 5);
+    });
 }
